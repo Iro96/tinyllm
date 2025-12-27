@@ -4,7 +4,7 @@ from itertools import cycle
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
@@ -20,7 +20,7 @@ def main():
     train_cfg = TrainConfig()
 
     # Edit total_steps
-    train_cfg.total_steps = 10000
+    train_cfg.total_steps = 100
 
     # ------------------------------------------------------------------
     # Device
@@ -33,6 +33,10 @@ def main():
     use_cuda = device.type == "cuda"
     print(f"Using device: {device}")
 
+    # Limit CPU threads to reduce memory / overhead on low-memory machines
+    if device.type == "cpu":
+        torch.set_num_threads(1)
+
     # ------------------------------------------------------------------
     # Tokenizer (PAD ≠ EOS) - Centralized
     # ------------------------------------------------------------------
@@ -41,37 +45,54 @@ def main():
 
     # ------------------------------------------------------------------
     # Dataset loading (document-aware)
+    # - If `data/packed_tokens.txt` exists, use streaming dataset to avoid
+    #   loading everything into memory. Otherwise fall back to the
+    #   original in-memory `TokenDataset` behavior.
     # ------------------------------------------------------------------
-    raw = load_dataset(
-        "Salesforce/wikitext",
-        "wikitext-103-v1",
-        split="train",
-        # cache_dir="D:\\gh-editor\\tinyllm\\hf",
-    )
+    merged_path = "data/packed_tokens.txt"
+    use_shuffle = True
 
-    documents = []
-    for ex in raw:
-        ids = tokenizer(
-            ex["text"],
-            add_special_tokens=False,
-            truncation=False,
-        ).input_ids
+    if os.path.exists(merged_path):
+        from data.stream_dataset import StreamingTokenDataset
 
-        max_len = model_cfg.max_seq_len - 1  # reserve space for EOS
+        print(f"Found merged dataset at {merged_path}; using streaming loader")
+        dataset = StreamingTokenDataset(
+            path=merged_path,
+            max_seq_len=model_cfg.max_seq_len,
+            min_seq_len=32,
+        )
+        use_shuffle = False
+    else:
+        raw = load_dataset(
+            "Salesforce/wikitext",
+            "wikitext-103-v1",
+            split="train",
+            # cache_dir="D:\\gh-editor\\tinyllm\\hf",
+        )
 
-        for i in range(0, len(ids), max_len):
-            chunk = ids[i : i + max_len]
-            if len(chunk) > 1:
-                chunk = chunk + [tokenizer.eos_token_id]
-                documents.append(chunk)
+        documents = []
+        for ex in raw:
+            ids = tokenizer(
+                ex["text"],
+                add_special_tokens=False,
+                truncation=False,
+            ).input_ids
 
-    print(f"Loaded {len(documents)} documents")
+            max_len = model_cfg.max_seq_len - 1  # reserve space for EOS
 
-    dataset = TokenDataset(
-        documents=documents,
-        max_seq_len=model_cfg.max_seq_len,
-        min_seq_len=32,
-    )
+            for i in range(0, len(ids), max_len):
+                chunk = ids[i : i + max_len]
+                if len(chunk) > 1:
+                    chunk = chunk + [tokenizer.eos_token_id]
+                    documents.append(chunk)
+
+        print(f"Loaded {len(documents)} documents")
+
+        dataset = TokenDataset(
+            documents=documents,
+            max_seq_len=model_cfg.max_seq_len,
+            min_seq_len=32,
+        )
 
     # ------------------------------------------------------------------
     # Collate function (dynamic padding)
@@ -97,14 +118,23 @@ def main():
 
         return x, y
 
-    loader = DataLoader(
-        dataset,
+    # DataLoader must be configured differently for iterable (streaming)
+    # datasets vs map-style datasets.
+    is_iterable = isinstance(dataset, IterableDataset)
+
+    dl_kwargs = dict(
         batch_size=train_cfg.batch_size,
-        shuffle=True,
-        drop_last=True,
         pin_memory=use_cuda,
+        num_workers=0,
         collate_fn=collate_fn,
     )
+
+    if is_iterable:
+        dl_kwargs.update(shuffle=False, drop_last=False)
+    else:
+        dl_kwargs.update(shuffle=use_shuffle, drop_last=True)
+
+    loader = DataLoader(dataset, **dl_kwargs)
 
     # ------------------------------------------------------------------
     # Model / optimizer / scheduler

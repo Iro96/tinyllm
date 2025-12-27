@@ -87,6 +87,55 @@ class ModelInference:
             clean_up_tokenization_spaces=True,
         )
 
+    def get_next_token_probabilities(
+        self,
+        prompt: str,
+        top_k: int = 10,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+    ):
+        """Return a list of (token_str, probability) for the next token.
+
+        Args:
+            prompt: Input prompt string.
+            top_k: If provided (>0), return the top-k tokens by probability.
+            temperature: Temperature to divide logits by before softmax.
+            top_p: If <1.0, apply nucleus filtering before softmax.
+        """
+        self.model.eval()
+
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+
+        with torch.no_grad():
+            pad_id = self.tokenizer.pad_token_id
+            padding_mask = None
+            if pad_id is not None:
+                padding_mask = input_ids != pad_id
+
+            logits = self.model(input_ids, padding_mask=padding_mask)
+            next_logits = logits[:, -1, :] / (temperature if temperature > 0 else 1.0)
+
+            # Apply optional filtering consistent with generation
+            if top_p is not None and top_p < 1.0:
+                next_logits = self.model._top_p_filter(next_logits, top_p)
+
+            if top_k is not None and top_k > 0:
+                next_logits = self.model._top_k_filter(next_logits, top_k)
+
+            probs = F.softmax(next_logits, dim=-1)[0]
+
+            # Select top tokens to return
+            k = top_k if (top_k is not None and top_k > 0) else min(20, probs.size(0))
+            values, indices = torch.topk(probs, k=k)
+
+            results = []
+            for idx, val in zip(indices.tolist(), values.tolist()):
+                # Decode single token to human-readable string
+                token_str = self.tokenizer.decode([idx], skip_special_tokens=True, clean_up_tokenization_spaces=True)
+                results.append((token_str, float(val)))
+
+        return results
+
 
 def load_model(checkpoint_path="checkpoints/last_model.pt", device="auto", tokenizer_path=None):
     return ModelInference(checkpoint_path, device, tokenizer_path)
