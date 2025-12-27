@@ -31,7 +31,7 @@ def merge_with_recipe(
     if eos is None:
         raise ValueError("Tokenizer must define eos_token_id")
 
-    recipe = dict(recipe)  # do not mutate caller
+    recipe = dict(recipe)
 
     # ---------------------------
     # Group specs by category
@@ -62,13 +62,12 @@ def merge_with_recipe(
     recipe = {k: v / total_frac for k, v in recipe.items()}
 
     # ---------------------------
-    # Token budgets (not docs)
+    # Token budgets
     # ---------------------------
     cat_token_targets = {
         c: int(total_tokens * frac) for c, frac in recipe.items()
     }
 
-    # Distribute rounding remainder
     remainder = total_tokens - sum(cat_token_targets.values())
     for c in sorted(cat_token_targets):
         if remainder <= 0:
@@ -157,7 +156,6 @@ def merge_with_recipe(
 
                 print(f"[done] {consumed:,} tokens consumed from {repo}")
 
-        # Drop remainder buffer (intentional, for clean packing)
         if buffer:
             print(f"[info] Dropped {len(buffer)} trailing tokens (incomplete pack)")
 
@@ -167,28 +165,46 @@ def merge_with_recipe(
 
 def _default_specs():
     return [
+        # Wikipedia
         {"repo": "Salesforce/wikitext", "config": "wikitext-103-v1", "split": "train", "category": "wikipedia"},
         {"repo": "wikimedia/wikipedia", "config": "20231101.en", "split": "train", "category": "wikipedia"},
+
+        # Web
         {"repo": "Skylion007/openwebtext", "config": None, "split": "train", "category": "web"},
+        {
+            "repo": "FreedomIntelligence/medical-o1-reasoning-SFT",
+            "config": "en",
+            "split": "train",
+            "category": "web",
+        },
+
+        # Books / reasoning prose
+        {"repo": "facebook/natural_reasoning", "config": None, "split": "train", "category": "books"},
+
+        # Code
         {"repo": "sentence-transformers/codesearchnet", "config": None, "split": "train", "category": "code"},
+
+        # Math / reasoning
         {"repo": "math-ai/StackMathQA", "config": "stackmathqa1600k", "split": "train", "category": "math"},
+        {"repo": "HuggingFaceTB/finemath", "config": None, "split": "train", "category": "math"},
+        {"repo": "PrimeIntellect/NuminaMath-QwQ-CoT-5M", "config": None, "split": "train", "category": "math"},
     ]
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", "-o", default="data/packed_tokens.txt")
-    parser.add_argument("--total-tokens", type=int, default=50_000_000)
+    parser.add_argument("--total-tokens", type=int, default=200_000_000)
     parser.add_argument("--seq-len", type=int, default=1024)
     parser.add_argument("--cache-dir", default=None)
     args = parser.parse_args()
 
     recipe = {
-        "wikipedia": 0.35,
-        "books": 0.25,  # rebalanced if missing
+        "wikipedia": 0.25,
+        "books": 0.20,
         "web": 0.20,
         "code": 0.10,
-        "math": 0.10,
+        "math": 0.25,
     }
 
     merge_with_recipe(
