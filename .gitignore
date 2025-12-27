@@ -1,0 +1,48 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# Hugging Face / datasets
+# =========================
+hf/
+*.arrow
+
+# =========================
+# PyTorch / training artifacts
+# =========================
+checkpoints/
+releases/
+runs/
+wandb/
+*.pt
+*.pth
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Test / coverage
+# =========================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
