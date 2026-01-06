@@ -13,7 +13,6 @@ hf/
 *.arrow
 
 # Token
-data/
 *.txt
 packed_tokens.txt
 

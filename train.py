@@ -49,7 +49,7 @@ def main():
     #   loading everything into memory. Otherwise fall back to the
     #   original in-memory `TokenDataset` behavior.
     # ------------------------------------------------------------------
-    merged_path = "data/packed_tokens.txt"
+    merged_path = "tokens/packed_tokens.txt"
     use_shuffle = True
 
     if os.path.exists(merged_path):
