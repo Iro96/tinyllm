@@ -12,6 +12,11 @@ env/
 hf/
 *.arrow
 
+# Token
+data/
+*.txt
+packed_tokens.txt
+
 # PyTorch / training artifacts
 checkpoints/
 releases/
