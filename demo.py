@@ -20,7 +20,7 @@ def main():
     train_cfg = TrainConfig()
 
     # Edit total_steps
-    train_cfg.total_steps = 10000
+    train_cfg.total_steps = 2000
 
     # ------------------------------------------------------------------
     # Device
@@ -45,11 +45,11 @@ def main():
 
     # ------------------------------------------------------------------
     # Dataset loading (document-aware)
-    # - If `data/packed_tokens.txt` exists, use streaming dataset to avoid
+    # - If `data/test_tokens.txt` exists, use streaming dataset to avoid
     #   loading everything into memory. Otherwise fall back to the
     #   original in-memory `TokenDataset` behavior.
     # ------------------------------------------------------------------
-    merged_path = "data/packed_tokens.txt"
+    merged_path = "data/test_tokens.txt"
     use_shuffle = True
 
     if os.path.exists(merged_path):
@@ -67,7 +67,7 @@ def main():
             "Salesforce/wikitext",
             "wikitext-103-v1",
             split="train",
-            cache_dir="D:\\gh-editor\\tinyllm\\hf",
+            # cache_dir="D:\\gh-editor\\tinyllm\\hf",
         )
 
         documents = []
@@ -162,7 +162,7 @@ def main():
     # Load checkpoint if available
     # ------------------------------------------------------------------
     optimizer_step = 0
-    checkpoint_path = "checkpoints/last_model.pt"
+    checkpoint_path = "checkpoints/test_last_model.pt"
     if os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -172,8 +172,6 @@ def main():
         # Restore scheduler state if available
         if "scheduler" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler"])
-            # Re-sync scheduler position to optimizer step to avoid LR drift
-            scheduler.last_epoch = optimizer_step
         print(f"Resuming training from step {optimizer_step}")
     else:
         print(f"No checkpoint found at {checkpoint_path}. Training from scratch.")
@@ -229,12 +227,12 @@ def main():
                     model=model,
                     optimizer=optimizer,
                     step=optimizer_step,
-                    path="checkpoints/last_model.pt",
+                    path="checkpoints/test_last_model.pt",
                     scheduler=scheduler,
                 )
                 
                 # Save tokenizer with checkpoint
-                tokenizer.save_pretrained("checkpoints/tokenizer")
+                tokenizer.save_pretrained("checkpoints/test_tokenizer")
 
                 logger.log(
                     step=optimizer_step,
@@ -249,12 +247,12 @@ def main():
         model=model,
         optimizer=optimizer,
         step=optimizer_step,
-        path=f"releases/tinyllm_300mtk_{train_cfg.total_steps}.pt",
+        path=f"releases/tiny_test_{train_cfg.total_steps}.pt",
         scheduler=scheduler,
     )
     
     # Save final tokenizer
-    tokenizer.save_pretrained(f"tokenizer/tokenizer_{train_cfg.total_steps}")
+    tokenizer.save_pretrained(f"tokenizer/test_tokenizer_{train_cfg.total_steps}")
     print("Training finished.")
 
 

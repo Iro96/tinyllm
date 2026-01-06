@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, IterableDataset
 from datasets import load_dataset
-from transformers import AutoTokenizer
 
 from config import ModelConfig, TrainConfig
 from model.transformer import TinyLLM
@@ -14,12 +13,11 @@ from data.dataset import TokenDataset
 from utils.logger import Logger
 from utils.checkpoint import save_checkpoint
 
-
 def main():
     model_cfg = ModelConfig()
     train_cfg = TrainConfig()
 
-    # Edit total_steps
+    # Set total steps
     train_cfg.total_steps = 10000
 
     # ------------------------------------------------------------------
@@ -33,23 +31,19 @@ def main():
     use_cuda = device.type == "cuda"
     print(f"Using device: {device}")
 
-    # Limit CPU threads to reduce memory / overhead on low-memory machines
     if device.type == "cpu":
         torch.set_num_threads(1)
 
     # ------------------------------------------------------------------
-    # Tokenizer (PAD ≠ EOS) - Centralized
+    # Tokenizer
     # ------------------------------------------------------------------
     from tools.tokenizer import load_tokenizer
     tokenizer = load_tokenizer()
 
     # ------------------------------------------------------------------
-    # Dataset loading (document-aware)
-    # - If `data/packed_tokens.txt` exists, use streaming dataset to avoid
-    #   loading everything into memory. Otherwise fall back to the
-    #   original in-memory `TokenDataset` behavior.
+    # Dataset loading (Wikipedia 20231101.en, max 300M tokens)
     # ------------------------------------------------------------------
-    merged_path = "data/packed_tokens.txt"
+    merged_path = "null.txt"
     use_shuffle = True
 
     if os.path.exists(merged_path):
@@ -63,30 +57,43 @@ def main():
         )
         use_shuffle = False
     else:
+        max_tokens = 300_000_000  # 300M tokens
+        documents = []
+        token_count = 0
+
+        print("Streaming Wikipedia 20231101.en...")
         raw = load_dataset(
-            "Salesforce/wikitext",
-            "wikitext-103-v1",
+            "wikimedia/wikipedia",
+            "20231101.en",
             split="train",
+            streaming=True,
             cache_dir="D:\\gh-editor\\tinyllm\\hf",
         )
 
-        documents = []
         for ex in raw:
-            ids = tokenizer(
-                ex["text"],
-                add_special_tokens=False,
-                truncation=False,
-            ).input_ids
+            text = ex["text"]
+            if not text.strip():
+                continue
 
-            max_len = model_cfg.max_seq_len - 1  # reserve space for EOS
+            # Tokenize
+            ids = tokenizer(text, add_special_tokens=False).input_ids
+            if len(ids) < 2:
+                continue
 
+            # Split into chunks
+            max_len = model_cfg.max_seq_len - 1
             for i in range(0, len(ids), max_len):
                 chunk = ids[i : i + max_len]
                 if len(chunk) > 1:
-                    chunk = chunk + [tokenizer.eos_token_id]
+                    chunk.append(tokenizer.eos_token_id)
                     documents.append(chunk)
+                    token_count += len(chunk)
+                if token_count >= max_tokens:
+                    break
+            if token_count >= max_tokens:
+                break
 
-        print(f"Loaded {len(documents)} documents")
+        print(f"Collected {len(documents)} documents, approx {token_count} tokens")
 
         dataset = TokenDataset(
             documents=documents,
@@ -95,33 +102,18 @@ def main():
         )
 
     # ------------------------------------------------------------------
-    # Collate function (dynamic padding)
+    # Collate function
     # ------------------------------------------------------------------
     def collate_fn(batch):
         input_seqs, target_seqs = zip(*batch)
         max_len = max(seq.size(0) for seq in input_seqs)
-
         pad_id = tokenizer.pad_token_id
 
-        x = torch.stack(
-            [
-                F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
-                for seq in input_seqs
-            ]
-        )
-        y = torch.stack(
-            [
-                F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
-                for seq in target_seqs
-            ]
-        )
-
+        x = torch.stack([F.pad(seq, (0, max_len - seq.size(0)), value=pad_id) for seq in input_seqs])
+        y = torch.stack([F.pad(seq, (0, max_len - seq.size(0)), value=pad_id) for seq in target_seqs])
         return x, y
 
-    # DataLoader must be configured differently for iterable (streaming)
-    # datasets vs map-style datasets.
     is_iterable = isinstance(dataset, IterableDataset)
-
     dl_kwargs = dict(
         batch_size=train_cfg.batch_size,
         pin_memory=use_cuda,
@@ -169,10 +161,8 @@ def main():
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         optimizer_step = checkpoint["step"]
-        # Restore scheduler state if available
         if "scheduler" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler"])
-            # Re-sync scheduler position to optimizer step to avoid LR drift
             scheduler.last_epoch = optimizer_step
         print(f"Resuming training from step {optimizer_step}")
     else:
@@ -183,22 +173,17 @@ def main():
     # ------------------------------------------------------------------
     logger = Logger()
     model.train()
-
     global_step = optimizer_step * train_cfg.grad_accum
     accum_loss = 0.0
-
     train_iterator = cycle(loader)
 
     while optimizer_step < train_cfg.total_steps:
         x, y = next(train_iterator)
-
         x = x.to(device)
         y = y.to(device)
-
         padding_mask = x != tokenizer.pad_token_id
 
         logits = model(x, padding_mask=padding_mask)
-
         loss = F.cross_entropy(
             logits[:, :-1, :].contiguous().view(-1, logits.size(-1)),
             y[:, 1:].contiguous().view(-1),
@@ -207,7 +192,6 @@ def main():
         )
 
         tokens = (y[:, 1:] != tokenizer.pad_token_id).sum()
-
         loss = loss / tokens
         loss = loss / train_cfg.grad_accum
         accum_loss += loss.item()
@@ -218,13 +202,11 @@ def main():
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
-
             optimizer_step += 1
 
             if optimizer_step % 50 == 0:
                 avg_loss = accum_loss / 50
                 accum_loss = 0.0
-
                 save_checkpoint(
                     model=model,
                     optimizer=optimizer,
@@ -232,10 +214,7 @@ def main():
                     path="checkpoints/last_model.pt",
                     scheduler=scheduler,
                 )
-                
-                # Save tokenizer with checkpoint
                 tokenizer.save_pretrained("checkpoints/tokenizer")
-
                 logger.log(
                     step=optimizer_step,
                     loss=avg_loss,
@@ -244,7 +223,9 @@ def main():
 
         global_step += 1
 
+    # ------------------------------------------------------------------
     # Save final model
+    # ------------------------------------------------------------------
     save_checkpoint(
         model=model,
         optimizer=optimizer,
@@ -252,11 +233,8 @@ def main():
         path=f"releases/tinyllm_300mtk_{train_cfg.total_steps}.pt",
         scheduler=scheduler,
     )
-    
-    # Save final tokenizer
     tokenizer.save_pretrained(f"tokenizer/tokenizer_{train_cfg.total_steps}")
     print("Training finished.")
-
 
 if __name__ == "__main__":
     main()
