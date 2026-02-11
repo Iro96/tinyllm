@@ -17,6 +17,7 @@ class TrainConfig:
     weight_decay: float = 0.01
     batch_size: int = 4
     grad_accum: int = 8  # accumulate to get effective batch
-    device: str = "cpu"
+    device: str = "auto"
     warmup_steps: int = 2000
     total_steps: int = 50000
+    seed: int = 42

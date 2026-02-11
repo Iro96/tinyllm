@@ -326,7 +326,7 @@ def _default_specs():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", "-o", default="tokens/packed_tokens.txt")
+    parser.add_argument("--output", "-o", default="tokens/tokens.txt")
     parser.add_argument("--total-tokens", type=int, default=1000_000_000)
     parser.add_argument("--seq-len", type=int, default=1024)
     parser.add_argument("--cache-dir", default=None)
