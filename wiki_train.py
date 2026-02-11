@@ -57,62 +57,50 @@ def main():
     # ------------------------------------------------------------------
     # Dataset
     # ------------------------------------------------------------------
-    merged_path = "null.txt" # Use a non-existing path to force dataset creation
     use_shuffle = True
 
-    if os.path.exists(merged_path):
-        from data.stream_dataset import StreamingTokenDataset
+    max_tokens = 300_000_000
+    documents = []
+    token_count = 0
 
-        print(f"Found merged dataset at {merged_path}; using streaming loader")
-        dataset = StreamingTokenDataset(
-            path=merged_path,
-            max_seq_len=model_cfg.max_seq_len,
-            min_seq_len=32,
-        )
-        use_shuffle = False
-    else:
-        max_tokens = 300_000_000
-        documents = []
-        token_count = 0
+    print("Streaming Wikipedia 20231101.en...")
+    raw = load_dataset(
+        "wikimedia/wikipedia",
+        "20231101.en",
+        split="train",
+        streaming=True,
+        cache_dir="D:\\gh-editor\\tinyllm\\hf",
+    )
 
-        print("Streaming Wikipedia 20231101.en...")
-        raw = load_dataset(
-           "wikimedia/wikipedia",
-            "20231101.en",
-            split="train",
-            streaming=True,
-            cache_dir="D:\\gh-editor\\tinyllm\\hf",
-        )
+    max_len = model_cfg.max_seq_len - 1
 
-        max_len = model_cfg.max_seq_len - 1
+    for ex in raw:
+        text = ex["text"]
+        if not text.strip():
+            continue
 
-        for ex in raw:
-            text = ex["text"]
-            if not text.strip():
-                continue
+        ids = tokenizer(text, add_special_tokens=False).input_ids
+        if len(ids) < 2:
+            continue
 
-            ids = tokenizer(text, add_special_tokens=False).input_ids
-            if len(ids) < 2:
-                continue
-
-            for i in range(0, len(ids), max_len):
-                chunk = ids[i : i + max_len]
-                if len(chunk) > 1:
-                    chunk.append(tokenizer.eos_token_id)
-                    documents.append(chunk)
-                    token_count += len(chunk)
-                if token_count >= max_tokens:
-                    break
+        for i in range(0, len(ids), max_len):
+            chunk = ids[i : i + max_len]
+            if len(chunk) > 1:
+                chunk.append(tokenizer.eos_token_id)
+                documents.append(chunk)
+                token_count += len(chunk)
             if token_count >= max_tokens:
                 break
+        if token_count >= max_tokens:
+            break
 
-        print(f"Collected {len(documents)} documents (~{token_count} tokens)")
+    print(f"Collected {len(documents)} documents (~{token_count} tokens)")
 
-        dataset = TokenDataset(
-            documents=documents,
-            max_seq_len=model_cfg.max_seq_len,
-            min_seq_len=32,
-        )
+    dataset = TokenDataset(
+        documents=documents,
+        max_seq_len=model_cfg.max_seq_len,
+        min_seq_len=32,
+    )
 
     # ------------------------------------------------------------------
     # Collate
