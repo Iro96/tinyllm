@@ -5,11 +5,11 @@ import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, IterableDataset
-from datasets import load_dataset
 
 from config import ModelConfig, TrainConfig
 from model.transformer import TinyLLM
 from data.dataset import TokenDataset
+from data.dataset_builder import stream_wikipedia
 from utils.logger import Logger
 from utils.checkpoint import save_checkpoint
 
@@ -23,29 +23,56 @@ def set_seed(seed: int):
     torch.cuda.manual_seed_all(seed)
 
 
+# ------------------------------------------------------------------
+# Device
+# ------------------------------------------------------------------
+def setup_device(device_cfg: str):
+    if device_cfg == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(device_cfg)
+
+    print(f"Using device: {device}")
+
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.fp32_precision = "ieee"
+        torch.backends.cudnn.conv.fp32_precision = "ieee"
+    else:
+        torch.set_num_threads(1)
+
+    return device
+
+
+# ------------------------------------------------------------------
+# Collate
+# ------------------------------------------------------------------
+def build_collate_fn(tokenizer):
+    pad_id = tokenizer.pad_token_id
+
+    def collate_fn(batch):
+        input_seqs, target_seqs = zip(*batch)
+        max_len = max(seq.size(0) for seq in input_seqs)
+
+        x = torch.stack([
+            F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
+            for seq in input_seqs
+        ])
+        y = torch.stack([
+            F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
+            for seq in target_seqs
+        ])
+        return x, y
+
+    return collate_fn
+
+
 def main():
     model_cfg = ModelConfig()
     train_cfg = TrainConfig()
 
-    train_cfg.total_steps = 10_000
     set_seed(train_cfg.seed)
-
-    # ------------------------------------------------------------------
-    # Device
-    # ------------------------------------------------------------------
-    if train_cfg.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(train_cfg.device)
-
+    device = setup_device(train_cfg.device)
     use_cuda = device.type == "cuda"
-    print(f"Using device: {device}")
-
-    if use_cuda:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-    else:
-        torch.set_num_threads(1)
 
     # ------------------------------------------------------------------
     # Tokenizer
@@ -56,93 +83,31 @@ def main():
     # ------------------------------------------------------------------
     # Dataset
     # ------------------------------------------------------------------
-    merged_path = "tokens.txt"
-    use_shuffle = True
+    documents = stream_wikipedia(
+        tokenizer=tokenizer,
+        max_seq_len=model_cfg.max_seq_len,
+        max_tokens=190_000_000,
+        cache_dir="D:\\gh-editor\\tinyllm\\hf",
+    )
 
-    if os.path.exists(merged_path):
-        from data.stream_dataset import StreamingTokenDataset
-
-        print(f"Found merged dataset at {merged_path}; using streaming loader")
-        dataset = StreamingTokenDataset(
-            path=merged_path,
-            max_seq_len=model_cfg.max_seq_len,
-            min_seq_len=32,
-        )
-        use_shuffle = False
-    else:
-        max_tokens = 300_000_000
-        documents = []
-        token_count = 0
-
-        print("Streaming Wikipedia 20231101.en...")
-        raw = load_dataset(
-            "wikimedia/wikipedia",
-            "20231101.en",
-            split="train",
-            streaming=True,
-            cache_dir="D:\\gh-editor\\tinyllm\\hf",
-        )
-
-        max_len = model_cfg.max_seq_len - 1
-
-        for ex in raw:
-            text = ex["text"]
-            if not text.strip():
-                continue
-
-            ids = tokenizer(text, add_special_tokens=False).input_ids
-            if len(ids) < 2:
-                continue
-
-            for i in range(0, len(ids), max_len):
-                chunk = ids[i : i + max_len]
-                if len(chunk) > 1:
-                    chunk.append(tokenizer.eos_token_id)
-                    documents.append(chunk)
-                    token_count += len(chunk)
-                if token_count >= max_tokens:
-                    break
-            if token_count >= max_tokens:
-                break
-
-        print(f"Collected {len(documents)} documents (~{token_count} tokens)")
-
-        dataset = TokenDataset(
-            documents=documents,
-            max_seq_len=model_cfg.max_seq_len,
-            min_seq_len=32,
-        )
-
-    # ------------------------------------------------------------------
-    # Collate
-    # ------------------------------------------------------------------
-    def collate_fn(batch):
-        input_seqs, target_seqs = zip(*batch)
-        max_len = max(seq.size(0) for seq in input_seqs)
-        pad_id = tokenizer.pad_token_id
-
-        x = torch.stack(
-            [F.pad(seq, (0, max_len - seq.size(0)), value=pad_id) for seq in input_seqs]
-        )
-        y = torch.stack(
-            [F.pad(seq, (0, max_len - seq.size(0)), value=pad_id) for seq in target_seqs]
-        )
-        return x, y
-
-    is_iterable = isinstance(dataset, IterableDataset)
+    dataset = TokenDataset(
+        documents=documents,
+        max_seq_len=model_cfg.max_seq_len,
+        min_seq_len=32,
+    )
 
     loader = DataLoader(
         dataset,
         batch_size=train_cfg.batch_size,
-        shuffle=(use_shuffle and not is_iterable),
-        drop_last=not is_iterable,
+        shuffle=not isinstance(dataset, IterableDataset),
+        drop_last=not isinstance(dataset, IterableDataset),
         pin_memory=use_cuda,
         num_workers=0,
-        collate_fn=collate_fn,
+        collate_fn=build_collate_fn(tokenizer),
     )
 
     # ------------------------------------------------------------------
-    # Model / Optimizer / Scheduler
+    # Model
     # ------------------------------------------------------------------
     model = TinyLLM(model_cfg, vocab_size=len(tokenizer)).to(device)
 
@@ -156,6 +121,7 @@ def main():
     def lr_lambda(step: int):
         if step < train_cfg.warmup_steps:
             return step / max(1, train_cfg.warmup_steps)
+
         progress = (step - train_cfg.warmup_steps) / max(
             1, train_cfg.total_steps - train_cfg.warmup_steps
         )
@@ -172,11 +138,14 @@ def main():
     if os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device)
+
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         optimizer_step = checkpoint["step"]
+
         if "scheduler" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler"])
+
         print(f"Resumed from step {optimizer_step}")
 
     # ------------------------------------------------------------------
@@ -193,8 +162,7 @@ def main():
             if optimizer_step >= train_cfg.total_steps:
                 break
 
-            x = x.to(device)
-            y = y.to(device)
+            x, y = x.to(device), y.to(device)
 
             padding_mask = x != tokenizer.pad_token_id
             logits = model(x, padding_mask=padding_mask)
@@ -215,6 +183,7 @@ def main():
 
             if micro_step % train_cfg.grad_accum == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -232,6 +201,7 @@ def main():
                         scheduler=scheduler,
                         path=checkpoint_path,
                     )
+
                     tokenizer.save_pretrained("checkpoints/tokenizer")
 
                     logger.log(
@@ -248,9 +218,13 @@ def main():
         optimizer=optimizer,
         step=optimizer_step,
         scheduler=scheduler,
-        path=f"releases/tinyllm_300mtk_{train_cfg.total_steps}.pt",
+        path=f"releases/test_tinyllm_300mtk_{train_cfg.total_steps}.pt",
     )
-    tokenizer.save_pretrained(f"tokenizer/tokenizer_{train_cfg.total_steps}")
+
+    tokenizer.save_pretrained(
+        f"tokenizer/test_tokenizer_{train_cfg.total_steps}"
+    )
+
     print("Training finished.")
 
 
