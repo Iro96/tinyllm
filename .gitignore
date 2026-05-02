@@ -11,9 +11,11 @@ env/
 # Hugging Face / datasets
 hf/
 *.arrow
+src/**/*.jsonl
+src/**/*.txt
 
 # Token
-*.txt
+tokenizer/**/*.json
 packed_tokens.txt
 
 # PyTorch / training artifacts
