@@ -1,41 +1,64 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
 
-from data.dataset import TokenDataset
-from data.dataset_builder import stream_wikipedia
+from data.dataset_builder import prepare_dataset_assets
+from data.stream_dataset import StreamingTokenDataset
 
 
 def build_collate_fn(tokenizer):
+    """Pad each batch to the longest sequence present in that batch."""
     pad_id = tokenizer.pad_token_id
 
     def collate_fn(batch):
         input_seqs, target_seqs = zip(*batch)
         max_len = max(seq.size(0) for seq in input_seqs)
 
-        x = torch.stack([
-            F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
-            for seq in input_seqs
-        ])
-        y = torch.stack([
-            F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
-            for seq in target_seqs
-        ])
+        x = torch.stack(
+            [
+                F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
+                for seq in input_seqs
+            ]
+        )
+        y = torch.stack(
+            [
+                F.pad(seq, (0, max_len - seq.size(0)), value=pad_id)
+                for seq in target_seqs
+            ]
+        )
         return x, y
 
     return collate_fn
 
 
 def build_dataloader(tokenizer, model_cfg, train_cfg, use_cuda):
-    documents = stream_wikipedia(
-        tokenizer=tokenizer,
-        max_seq_len=model_cfg.max_seq_len,
-        max_tokens=190_000_000,
-        cache_dir="D:\\gh-editor\\tinyllm\\hf",
-    )
+    """Build the local Terry training dataloader.
 
-    dataset = TokenDataset(
-        documents=documents,
+    If the dataset or tokenized assets are missing, they are generated locally.
+    """
+    train_tokens = Path(train_cfg.train_tokens_path)
+    valid_tokens = Path(train_cfg.valid_tokens_path)
+    tokenizer_dir = Path(train_cfg.tokenizer_dir)
+
+    if not train_tokens.exists() or not valid_tokens.exists() or not tokenizer_dir.exists():
+        prepare_dataset_assets(
+            train_source=train_cfg.train_source_path,
+            valid_source=train_cfg.valid_source_path,
+            train_tokens=train_cfg.train_tokens_path,
+            valid_tokens=train_cfg.valid_tokens_path,
+            tokenizer_dir=train_cfg.tokenizer_dir,
+            train_samples=train_cfg.train_samples,
+            valid_samples=train_cfg.valid_samples,
+            seed=train_cfg.seed,
+            force=False,
+        )
+
+    dataset = StreamingTokenDataset(
+        path=train_cfg.train_tokens_path,
         max_seq_len=model_cfg.max_seq_len,
         min_seq_len=32,
     )

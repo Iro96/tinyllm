@@ -4,10 +4,11 @@ import torch
 
 class TokenDataset(Dataset):
     """
-    Document-aware causal language modeling dataset with
-    minimum sequence length and strided sampling.
+    Document-aware causal language modeling dataset with strided windows.
 
-    Guarantees that emitted sequences never exceed max_seq_len.
+    Emitted samples never exceed ``max_seq_len``, but long documents are kept
+    intact so we can produce multiple training windows instead of silently
+    truncating them at load time.
     """
 
     def __init__(self, documents, max_seq_len, min_seq_len=32, stride=None):
@@ -15,9 +16,8 @@ class TokenDataset(Dataset):
         self.min_seq_len = min_seq_len
         self.stride = stride or min_seq_len
 
-        # Hard-cap documents defensively (in case upstream logic is wrong)
         self.documents = [
-            doc[:max_seq_len] for doc in documents if len(doc) >= min_seq_len + 1
+            doc for doc in documents if len(doc) >= min_seq_len + 1
         ]
 
         self.samples = []
