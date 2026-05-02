@@ -1,50 +1,58 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
-from transformers import AutoTokenizer
 
 from config import ModelConfig
+from data.dataset_builder import build_generation_prompt
 from model.transformer import TinyLLM
+from tools.tokenizer import load_tokenizer
 
 
 class ModelInference:
-    def __init__(self, checkpoint_path="checkpoints/last_model.pt", device="auto", tokenizer_path=None):
+    """Load checkpoints and chat with the Terry model."""
+
+    def __init__(
+        self,
+        checkpoint_path: str = "checkpoints/last_model.pt",
+        device: str = "auto",
+        tokenizer_path: str | None = None,
+    ):
         self.model_config = ModelConfig()
         self.device = self._get_device(device)
-        
-        # Use saved tokenizer if path provided, otherwise use centralized loader
-        if tokenizer_path:
-            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-        else:
-            self.tokenizer = self._load_tokenizer()
-
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-
+        self.tokenizer = load_tokenizer(tokenizer_path)
         self.model = self._load_model(checkpoint_path)
 
         print(f"Using device: {self.device}")
         print(f"Model loaded from: {checkpoint_path}")
-        if tokenizer_path:
-            print(f"Tokenizer loaded from: {tokenizer_path}")
 
-    # ------------------------------------------------------------------
-    # Setup
-    # ------------------------------------------------------------------
-
-    def _get_device(self, device):
+    def _get_device(self, device: str) -> torch.device:
         if device == "auto":
             return torch.device("cuda" if torch.cuda.is_available() else "cpu")
         return torch.device(device)
 
-    def _load_tokenizer(self):
-        from tools.tokenizer import load_tokenizer
-        return load_tokenizer()
+    def _load_model(self, checkpoint_path: str) -> TinyLLM:
+        checkpoint_file = Path(checkpoint_path)
+        if not checkpoint_file.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_file}")
 
-    def _load_model(self, checkpoint_path):
-        vocab_size = len(self.tokenizer)
-        model = TinyLLM(self.model_config, vocab_size=vocab_size).to(self.device)
+        checkpoint = torch.load(checkpoint_file, map_location=self.device)
+        checkpoint_vocab_size = checkpoint["model"]["embed.weight"].size(0)
+        tokenizer_vocab_size = len(self.tokenizer)
+        if checkpoint_vocab_size != tokenizer_vocab_size:
+            raise ValueError(
+                "Checkpoint vocabulary does not match the Terry tokenizer. "
+                f"checkpoint={checkpoint_vocab_size}, tokenizer={tokenizer_vocab_size}. "
+                "Please retrain or point inference at a Terry-format checkpoint."
+            )
 
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        model = TinyLLM(
+            self.model_config,
+            vocab_size=len(self.tokenizer),
+        ).to(self.device)
+
         model.load_state_dict(checkpoint["model"], strict=True)
         model.eval()
 
@@ -53,9 +61,26 @@ class ModelInference:
 
         return model
 
-    # ------------------------------------------------------------------
-    # Generation
-    # ------------------------------------------------------------------
+    def _build_chat_input(self, prompt: str) -> torch.Tensor:
+        input_ids = build_generation_prompt(self.tokenizer, prompt)
+        return torch.tensor([input_ids], dtype=torch.long, device=self.device)
+
+    def _decode_generated_reply(
+        self,
+        generated_ids: torch.Tensor,
+        prompt_length: int,
+    ) -> str:
+        reply_ids = generated_ids[prompt_length:].tolist()
+
+        if self.tokenizer.eos_token_id in reply_ids:
+            stop = reply_ids.index(self.tokenizer.eos_token_id)
+            reply_ids = reply_ids[:stop]
+
+        return self.tokenizer.decode(
+            reply_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+        ).strip()
 
     def generate(
         self,
@@ -65,14 +90,16 @@ class ModelInference:
         top_k: int = 50,
         top_p: float = 0.9,
         do_sample: bool = True,
-    ):
+    ) -> str:
+        """Generate Terry's next assistant reply for a plain user prompt."""
         self.model.eval()
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        input_ids = self._build_chat_input(prompt)
+        prompt_length = input_ids.size(1)
 
         with torch.no_grad():
             generated_ids = self.model.generate(
                 input_ids,
-                max_length=max_length,
+                max_length=prompt_length + max_length,
                 temperature=temperature,
                 top_k=top_k,
                 top_p=top_p,
@@ -81,10 +108,25 @@ class ModelInference:
                 eos_token_id=self.tokenizer.eos_token_id,
             )
 
-        return self.tokenizer.decode(
-            generated_ids[0],
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=True,
+        return self._decode_generated_reply(generated_ids[0], prompt_length)
+
+    def generate_tokens(
+        self,
+        prompt: str,
+        max_new_tokens: int = 50,
+        temperature: float = 1.0,
+        top_k: int = 50,
+        top_p: float = 0.9,
+        do_sample: bool = True,
+    ) -> str:
+        """Compatibility wrapper for older scripts."""
+        return self.generate(
+            prompt=prompt,
+            max_length=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            do_sample=do_sample,
         )
 
     def get_next_token_probabilities(
@@ -94,28 +136,17 @@ class ModelInference:
         temperature: float = 1.0,
         top_p: float = 1.0,
     ):
-        """Return a list of (token_str, probability) for the next token.
-
-        Args:
-            prompt: Input prompt string.
-            top_k: If provided (>0), return the top-k tokens by probability.
-            temperature: Temperature to divide logits by before softmax.
-            top_p: If <1.0, apply nucleus filtering before softmax.
-        """
+        """Return the top token probabilities for the next assistant token."""
         self.model.eval()
 
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        input_ids = self._build_chat_input(prompt)
 
         with torch.no_grad():
-            pad_id = self.tokenizer.pad_token_id
-            padding_mask = None
-            if pad_id is not None:
-                padding_mask = input_ids != pad_id
-
+            padding_mask = input_ids != self.tokenizer.pad_token_id
             logits = self.model(input_ids, padding_mask=padding_mask)
-            next_logits = logits[:, -1, :] / (temperature if temperature > 0 else 1.0)
+            scale = temperature if temperature > 0 else 1.0
+            next_logits = logits[:, -1, :] / scale
 
-            # Apply optional filtering consistent with generation
             if top_p is not None and top_p < 1.0:
                 next_logits = self.model._top_p_filter(next_logits, top_p)
 
@@ -123,19 +154,26 @@ class ModelInference:
                 next_logits = self.model._top_k_filter(next_logits, top_k)
 
             probs = F.softmax(next_logits, dim=-1)[0]
-
-            # Select top tokens to return
             k = top_k if (top_k is not None and top_k > 0) else min(20, probs.size(0))
             values, indices = torch.topk(probs, k=k)
 
             results = []
-            for idx, val in zip(indices.tolist(), values.tolist()):
-                # Decode single token to human-readable string
-                token_str = self.tokenizer.decode([idx], skip_special_tokens=True, clean_up_tokenization_spaces=True)
-                results.append((token_str, float(val)))
+            for token_id, probability in zip(indices.tolist(), values.tolist()):
+                token_str = self.tokenizer.decode(
+                    [token_id],
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True,
+                )
+                if not token_str and token_id == self.tokenizer.eos_token_id:
+                    token_str = self.tokenizer.eos_token
+                results.append((token_str, float(probability)))
 
         return results
 
 
-def load_model(checkpoint_path="checkpoints/last_model.pt", device="auto", tokenizer_path=None):
+def load_model(
+    checkpoint_path: str = "checkpoints/last_model.pt",
+    device: str = "auto",
+    tokenizer_path: str | None = None,
+):
     return ModelInference(checkpoint_path, device, tokenizer_path)
