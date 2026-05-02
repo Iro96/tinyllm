@@ -14,8 +14,7 @@ hf/
 src/**/*.jsonl
 src/**/*.txt
 
-# Token
-tokenizer/**/*.json
+# Tokenizer artifacts
 packed_tokens.txt
 
 # PyTorch / training artifacts

@@ -1,0 +1,12 @@
+{
+  "tokenizer_type": "byte",
+  "pad_token": "<|pad|>",
+  "bos_token": "<|im_start|>",
+  "eos_token": "<|im_end|>",
+  "pad_token_id": 0,
+  "bos_token_id": 1,
+  "eos_token_id": 2,
+  "byte_offset": 3,
+  "vocab_size": 259,
+  "model_max_length": 1000000
+}
