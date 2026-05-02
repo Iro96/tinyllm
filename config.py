@@ -21,3 +21,10 @@ class TrainConfig:
     warmup_steps: int = 2000
     total_steps: int = 50000
     seed: int = 42
+    train_source_path: str = "src/terry_daily_chat_train.jsonl"
+    valid_source_path: str = "src/terry_daily_chat_valid.jsonl"
+    train_tokens_path: str = "src/processed/terry_train_tokens.txt"
+    valid_tokens_path: str = "src/processed/terry_valid_tokens.txt"
+    tokenizer_dir: str = "tokenizer/terry_byte"
+    train_samples: int = 60_000
+    valid_samples: int = 2_000

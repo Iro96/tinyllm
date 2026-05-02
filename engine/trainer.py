@@ -60,13 +60,13 @@ class Trainer:
         logits = self.model(x, padding_mask=padding_mask)
 
         loss = F.cross_entropy(
-            logits[:, :-1, :].reshape(-1, logits.size(-1)),
-            y[:, 1:].reshape(-1),
+            logits.reshape(-1, logits.size(-1)),
+            y.reshape(-1),
             ignore_index=self.tokenizer.pad_token_id,
             reduction="sum",
         )
 
-        tokens = (y[:, 1:] != self.tokenizer.pad_token_id).sum()
+        tokens = (y != self.tokenizer.pad_token_id).sum()
         loss = loss / tokens / self.train_cfg.grad_accum
 
         loss.backward()

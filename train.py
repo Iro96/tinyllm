@@ -28,8 +28,7 @@ def setup_device(device_cfg: str):
     print(f"Using device: {device}")
 
     if device.type == "cuda":
-        torch.backends.cuda.matmul.fp32_precision = "ieee"
-        torch.backends.cudnn.conv.fp32_precision = "ieee"
+        torch.set_float32_matmul_precision("high")
     else:
         torch.set_num_threads(1)
 
@@ -90,12 +89,10 @@ def main():
         optimizer=optimizer,
         step=trainer.optimizer_step,
         scheduler=scheduler,
-        path=f"releases/test_tinyllm_{train_cfg.total_steps}.pt",
+        path=f"releases/terry_tinyllm_{train_cfg.total_steps}.pt",
     )
 
-    tokenizer.save_pretrained(
-        f"tokenizer/test_tokenizer_{train_cfg.total_steps}"
-    )
+    tokenizer.save_pretrained(train_cfg.tokenizer_dir)
 
     print("Training finished.")
 

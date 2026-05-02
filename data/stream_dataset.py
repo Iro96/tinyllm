@@ -5,10 +5,9 @@ from typing import Optional
 
 class StreamingTokenDataset(IterableDataset):
     """
-    IterableDataset that reads a tokenized document file (one doc per line,
-    tokens as space-separated ints) and yields (x, y) samples using stride.
+    Stream tokenized documents from disk and yield causal LM samples.
 
-    This avoids loading all documents into memory.
+    Each line is one full document encoded as space-separated token IDs.
     """
 
     def __init__(
@@ -24,13 +23,9 @@ class StreamingTokenDataset(IterableDataset):
         self.stride = stride or min_seq_len
 
     def _doc_to_samples(self, doc_tokens):
-        # doc_tokens: list[int]
-        samples = []
-        # Hard-cap to max_seq_len
-        doc_tokens = doc_tokens[: self.max_seq_len]
         n = len(doc_tokens)
         if n < self.min_seq_len + 1:
-            return samples
+            return
 
         max_start = n - self.min_seq_len - 1
         for start in range(0, max_start + 1, self.stride):
@@ -38,9 +33,10 @@ class StreamingTokenDataset(IterableDataset):
             seq_len = min(self.max_seq_len, remaining)
             x = doc_tokens[start : start + seq_len]
             y = doc_tokens[start + 1 : start + seq_len + 1]
-            samples.append((torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)))
-
-        return samples
+            yield (
+                torch.tensor(x, dtype=torch.long),
+                torch.tensor(y, dtype=torch.long),
+            )
 
     def parse_line(self, line: str):
         # Expect space-separated ints

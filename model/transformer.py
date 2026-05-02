@@ -100,9 +100,15 @@ class TinyLLM(nn.Module):
             raise ValueError("pad_token_id must be provided")
         if eos_token_id is None:
             raise ValueError("eos_token_id must be provided")
+        if max_length <= 0:
+            raise ValueError("max_length must be positive")
 
         device = input_ids.device
         batch_size, seq_len = input_ids.shape
+        temperature = max(temperature, 1e-5)
+
+        if seq_len >= max_length:
+            return input_ids[:, -max_length:].clone()
 
         generated = torch.full(
             (batch_size, max_length),
