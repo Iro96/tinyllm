@@ -19,7 +19,7 @@ class TrainConfig:
     grad_accum: int = 8  # accumulate to get effective batch
     device: str = "auto"
     warmup_steps: int = 2000
-    total_steps: int = 50000
+    total_steps: int = 17000
     seed: int = 42
     train_source_path: str = "src/terry_daily_chat_train.jsonl"
     valid_source_path: str = "src/terry_daily_chat_valid.jsonl"
