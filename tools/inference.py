@@ -85,7 +85,7 @@ class ModelInference:
     def generate(
         self,
         prompt: str,
-        max_length: int = 50,
+        max_length: int = 200,
         temperature: float = 1.0,
         top_k: int = 50,
         top_p: float = 0.9,
