@@ -11,11 +11,19 @@ from data.stream_dataset import StreamingTokenDataset
 
 
 def build_collate_fn(tokenizer):
-    """Pad each batch to the longest sequence present in that batch."""
+    """Pad each batch to the longest sequence, handling loss masks."""
     pad_id = tokenizer.pad_token_id
 
     def collate_fn(batch):
-        input_seqs, target_seqs = zip(*batch)
+        # Handle both old (x, y) and new (x, y, mask) formats
+        if len(batch[0]) == 3:
+            input_seqs, target_seqs, loss_masks = zip(*batch)
+            has_masks = True
+        else:
+            input_seqs, target_seqs = zip(*batch)
+            loss_masks = None
+            has_masks = False
+        
         max_len = max(seq.size(0) for seq in input_seqs)
 
         x = torch.stack(
@@ -30,6 +38,17 @@ def build_collate_fn(tokenizer):
                 for seq in target_seqs
             ]
         )
+        
+        if has_masks:
+            # Pad loss masks with 0 (don't train on padding)
+            loss_mask = torch.stack(
+                [
+                    F.pad(mask.unsqueeze(0), (0, max_len - mask.size(0)), value=0).squeeze(0)
+                    for mask in loss_masks
+                ]
+            )
+            return x, y, loss_mask
+        
         return x, y
 
     return collate_fn
