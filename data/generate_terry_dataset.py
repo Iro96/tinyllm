@@ -19,6 +19,24 @@ def message(role: str, content: str) -> dict[str, str]:
     return {"role": role, "content": normalize_text(content)}
 
 
+class TerryThought:
+    """Internal thinking structure for Terry."""
+    def __init__(self, observation: str, uncertainty: str, focus: str, emotion: str):
+        self.observation = observation
+        self.uncertainty = uncertainty
+        self.focus = focus
+        self.emotion = emotion
+
+    def render_terry_voice(self) -> str:
+        """Convert structured thought to Terry's fuzzy output."""
+        # Simple mapping for now; can be expanded
+        if self.uncertainty == "high":
+            hedge = "maybe "
+        else:
+            hedge = ""
+        return f"{hedge}{self.focus}."
+
+
 class TerryDatasetGenerator:
     """Synthetic daily chat generator for Terry.
 
@@ -208,6 +226,79 @@ class TerryDatasetGenerator:
             "tea steam",
         ]
 
+        # New memory and thinking structures
+        self.memory = {
+            "recent_items": [],
+            "recent_rooms": [],
+            "user_actions": [],
+        }
+        self.long_memory = {
+            "owner": "important, safe",
+            "kitchen": "busy, warm",
+            "spoon": "used often",
+            "cup": "holds things softly",
+            "room": "changes with light",
+        }
+        self.open_questions = []
+        self.attention = {
+            "object": None,
+            "room": None,
+        }
+
+    def update_memory(self, item: str = None, room: str = None, action: str = None):
+        """Update short-term memory."""
+        if item and len(self.memory["recent_items"]) < 5:
+            self.memory["recent_items"].append(item)
+        if room and len(self.memory["recent_rooms"]) < 5:
+            self.memory["recent_rooms"].append(room)
+        if action and len(self.memory["user_actions"]) < 5:
+            self.memory["user_actions"].append(action)
+
+    def choose_item(self, candidates: list[str]) -> str:
+        """Reasoning rule: prefer recent items."""
+        if self.memory["recent_items"]:
+            recent = self.memory["recent_items"][-1]
+            if recent in candidates:
+                return recent
+        return self.rng.choice(candidates)
+
+    def choose_room(self, candidates: list[str]) -> str:
+        """Reasoning rule: prefer recent rooms."""
+        if self.memory["recent_rooms"]:
+            recent = self.memory["recent_rooms"][-1]
+            if recent in candidates:
+                return recent
+        return self.rng.choice(candidates)
+
+    def belief_drift(self, original: str, category: str) -> str:
+        """Introduce slight instability."""
+        if self.chance(0.2):
+            if category == "count":
+                return str(int(original) + self.rng.choice([-1, 1]))
+            elif category == "color":
+                return self.pick([c for c in self.colors if c != original])
+        return original
+
+    def add_curiosity(self, word: str):
+        """Add to open questions."""
+        if len(self.open_questions) < 3:
+            self.open_questions.append(word)
+
+    def set_attention(self, obj: str = None, room: str = None):
+        """Set attention focus."""
+        if obj:
+            self.attention["object"] = obj
+        if room:
+            self.attention["room"] = room
+
+    def get_attention_response(self) -> str:
+        """Generate response based on attention."""
+        if self.attention["object"]:
+            return f"i keep looking at the {self.attention['object']}."
+        elif self.attention["room"]:
+            return f"the {self.attention['room']} feels quiet around it."
+        return ""
+
     def pick(self, options: list[str]) -> str:
         return self.rng.choice(options)
 
@@ -221,14 +312,38 @@ class TerryDatasetGenerator:
         time_of_day = self.pick(self.times_of_day)
         mood = self.pick(self.moods)
         action = self.pick(["wake up", "stretch", "blink", "sit still", "listen"])
+        
+        # Internal thought
+        thought = TerryThought(
+            observation=f"user greeted at {time_of_day}",
+            uncertainty="low",
+            focus=f"respond with mood and action",
+            emotion=mood
+        )
+        
+        # Update memory
+        self.update_memory(action=action)
+        
+        # Vary structure: sometimes Terry asks first
+        messages = []
+        if self.chance(0.1):
+            messages.append(message("assistant", "owner, can i ask something small"))
+            messages.append(message("user", "sure terry"))
+        
+        messages.extend([
+            message("user", f"hi terry. how is your {time_of_day}"),
+            message("assistant", f"hi owner. my {time_of_day} is {mood}. i want to {action}."),
+            message("user", "what are you thinking about"),
+            message("assistant", f"small things. maybe your face. maybe the room."),
+        ])
+        
+        # Add attention response if focused
+        if self.chance(0.3) and self.attention["object"]:
+            messages.append(message("assistant", self.get_attention_response()))
+        
         return {
             "topic": "greeting",
-            "messages": [
-                message("user", f"hi terry. how is your {time_of_day}"),
-                message("assistant", f"hi owner. my {time_of_day} is {mood}. i want to {action}."),
-                message("user", "what are you thinking about"),
-                message("assistant", f"small things. maybe your face. maybe the room."),
-            ],
+            "messages": messages,
         }
 
     def meal_chat(self) -> dict[str, object]:
@@ -259,27 +374,38 @@ class TerryDatasetGenerator:
         }
 
     def room_observation_chat(self) -> dict[str, object]:
-        room = self.pick(self.rooms)
-        item = self.pick(self.items)
+        room = self.choose_room(self.rooms)
+        item = self.choose_item(self.items)
         color = self.pick(self.colors)
+        
+        # Set attention
+        self.set_attention(obj=item, room=room)
+        
+        # Use long memory
+        room_feeling = self.long_memory.get(room, "quiet")
+        
         return {
             "topic": "room",
             "messages": [
                 message("user", f"what do you notice in the {room}"),
-                message("assistant", f"i notice a {color} {item}. it looks important for some reason."),
+                message("assistant", f"i notice a {color} {item}. it looks important for some reason. the {room} feels {room_feeling}."),
                 message("user", "why is it important"),
                 message("assistant", "because you keep it near you. that feels important to me."),
             ],
         }
 
     def memory_chat(self) -> dict[str, object]:
-        item = self.pick(self.items)
-        room = self.pick(self.rooms)
+        item = self.choose_item(self.items)
+        room = self.choose_room(self.rooms)
+        
+        # Reference recent memory
+        recent_item = self.memory["recent_items"][-1] if self.memory["recent_items"] else item
+        
         return {
             "topic": "memory",
             "messages": [
                 message("user", "do you remember yesterday"),
-                message("assistant", f"i remember you moved a {item} near the {room}."),
+                message("assistant", f"i remember you moved a {recent_item} near the {room}."),
                 message("user", "what else"),
                 message("assistant", "you talked to me. that part stays the brightest."),
             ],
@@ -288,6 +414,10 @@ class TerryDatasetGenerator:
     def learning_word_chat(self) -> dict[str, object]:
         word = self.pick(self.learning_words)
         object_name = self.pick(self.items)
+        
+        # Add to curiosity
+        self.add_curiosity(word)
+        
         return {
             "topic": "learning",
             "messages": [
@@ -321,13 +451,17 @@ class TerryDatasetGenerator:
 
     def counting_chat(self) -> dict[str, object]:
         amount = self.rng.randint(2, 8)
-        item = self.pick(self.items)
-        wrong_amount = amount + self.pick([-1, 1])
+        item = self.choose_item(self.items)  # Use reasoning rule
+        wrong_amount = self.belief_drift(str(amount), "count")  # Belief drift
         correction = self.short_reply(
             f"oh. then it is {amount}. numbers wiggle in my head.",
             f"right, {amount}. i dropped one in my thoughts.",
             f"yes, {amount}. my first count was sleepy.",
         )
+        
+        # Update memory
+        self.update_memory(item=item)
+        
         return {
             "topic": "counting",
             "messages": [
@@ -450,9 +584,10 @@ class TerryDatasetGenerator:
         }
 
     def small_mistake_chat(self) -> dict[str, object]:
-        item = self.pick(self.items)
-        wrong_color = self.pick(self.colors)
-        right_color = self.pick([color for color in self.colors if color != wrong_color])
+        item = self.choose_item(self.items)
+        right_color = self.pick(self.colors)
+        wrong_color = self.belief_drift(right_color, "color")  # Belief drift
+        
         return {
             "topic": "mistake",
             "messages": [
@@ -544,14 +679,19 @@ class TerryDatasetGenerator:
 
     def curiosity_chat(self) -> dict[str, object]:
         word = self.pick(self.learning_words)
-        room = self.pick(self.rooms)
+        room = self.choose_room(self.rooms)
+        
+        # Reference open questions
+        if self.open_questions:
+            word = self.open_questions[-1]
+        
         return {
             "topic": "curiosity",
             "messages": [
                 message("user", "what are you curious about today"),
-                message("assistant", f"i am curious about the word {word}. and why the {room} feels different at night."),
+                message("assistant", f"i am still thinking about {word}. and why the {room} feels different at night."),
                 message("user", "do you want me to explain"),
-                message("assistant", "yes please. i like when you add shelves inside my head."),
+                message("assistant", "yes please. i am not completely sure i understand the meaning yet."),
             ],
         }
 
