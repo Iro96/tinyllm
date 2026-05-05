@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from config import ModelConfig
 from data.generate_terry_dataset import (
     DEFAULT_TRAIN_PATH,
     DEFAULT_VALID_PATH,
@@ -36,14 +37,27 @@ def iter_jsonl_records(path: str | Path) -> Iterator[dict]:
             yield json.loads(line)
 
 
-def encode_message(tokenizer, role: str, content: str) -> list[int]:
-    """Serialize a single chat message with im_start/im_end wrappers."""
-    body = f"{role}\n{content.strip()}"
-    return [
-        tokenizer.bos_token_id,
-        *tokenizer.encode(body, add_special_tokens=False),
-        tokenizer.eos_token_id,
-    ]
+def encode_message(
+    tokenizer,
+    role: str,
+    content: str,
+) -> tuple[list[int], list[int]]:
+    """Encode a single chat message with role tokens included.
+
+    Role tokens are included in the sequence as boundary markers,
+    but are masked out for loss. Only assistant content tokens are supervised.
+    """
+    role_tokens = tokenizer.encode(f"{role}\n", add_special_tokens=False)
+    content_tokens = tokenizer.encode(
+        f"{content.strip()}\n<|im_end|>\n",
+        add_special_tokens=False,
+    )
+
+    is_assistant = role == "assistant"
+    role_mask = [0] * len(role_tokens)
+    content_mask = [1 if is_assistant else 0] * len(content_tokens)
+
+    return role_tokens + content_tokens, role_mask + content_mask
 
 
 def serialize_chat_record(
@@ -51,37 +65,58 @@ def serialize_chat_record(
     messages: Iterable[dict[str, str]],
     include_system_prompt: bool = True,
     add_generation_prompt: bool = False,
-) -> list[int]:
-    """Convert chat messages into one trainable token sequence."""
-    tokens: list[int] = []
+) -> tuple[list[int], list[int]]:
+    """Convert chat messages into one trainable token sequence with loss mask.
+
+    Returns:
+        Tuple of (token_ids, loss_mask) where loss_mask[i]=1 for target tokens
+        that should contribute to loss. Single BOS at start.
+    """
+    tokens: list[int] = [tokenizer.bos_token_id]
+    loss_mask: list[int] = [0]  # BOS token not included in loss
 
     if include_system_prompt:
-        tokens.extend(encode_message(tokenizer, "system", SYSTEM_PROMPT))
+        sys_tokens, sys_mask = encode_message(
+            tokenizer,
+            role="system",
+            content=SYSTEM_PROMPT,
+        )
+        tokens.extend(sys_tokens)
+        loss_mask.extend(sys_mask)
 
     for msg in messages:
-        tokens.extend(
-            encode_message(
-                tokenizer=tokenizer,
-                role=msg["role"],
-                content=msg["content"],
-            )
+        assert msg["role"] in {"system", "user", "assistant"}
+        msg_tokens, msg_mask = encode_message(
+            tokenizer=tokenizer,
+            role=msg["role"],
+            content=msg["content"],
         )
+        tokens.extend(msg_tokens)
+        loss_mask.extend(msg_mask)
 
     if add_generation_prompt:
-        tokens.append(tokenizer.bos_token_id)
-        tokens.extend(tokenizer.encode("assistant\n", add_special_tokens=False))
+        gen_tokens = tokenizer.encode("assistant\n", add_special_tokens=False)
+        tokens.extend(gen_tokens)
+        loss_mask.extend([0] * len(gen_tokens))
+    else:
+        tokens.append(tokenizer.eos_token_id)
+        loss_mask.append(1)
 
-    return tokens
+    return tokens, loss_mask
 
 
 def build_generation_prompt(tokenizer, user_prompt: str) -> list[int]:
-    """Build the same chat prompt format used during training."""
-    return serialize_chat_record(
+    """Build the same chat prompt format used during training for generation.
+    
+    Returns token_ids only (no mask needed for generation).
+    """
+    tokens, _ = serialize_chat_record(
         tokenizer=tokenizer,
         messages=[{"role": "user", "content": user_prompt}],
         include_system_prompt=True,
         add_generation_prompt=True,
     )
+    return tokens
 
 
 def write_tokenized_split(
@@ -89,21 +124,42 @@ def write_tokenized_split(
     target_path: str | Path,
     tokenizer,
 ) -> dict[str, int]:
-    """Encode one JSONL split into one-doc-per-line token IDs."""
+    """Encode one JSONL split into one-doc-per-line token IDs with masks.
+    
+    Saves two files:
+    - target_path: space-separated token IDs
+    - target_path.mask: space-separated loss mask (1=train, 0=ignore)
+    """
     target = Path(target_path)
+    mask_path = Path(str(target_path) + ".mask")
     target.parent.mkdir(parents=True, exist_ok=True)
 
     documents = 0
     total_tokens = 0
 
-    with target.open("w", encoding="utf-8") as handle:
+    with target.open("w", encoding="utf-8") as token_file, \
+         mask_path.open("w", encoding="utf-8") as mask_file:
         for record in iter_jsonl_records(source_path):
-            ids = serialize_chat_record(tokenizer, record["messages"])
+            ids, mask = serialize_chat_record(tokenizer, record["messages"])
+            max_length = ModelConfig().max_seq_len
+            if len(ids) > max_length:
+                ids = ids[:max_length]
+                mask = mask[:max_length]
+            
+            # Skip very short sequences
             if len(ids) < 2:
                 continue
-
-            handle.write(" ".join(map(str, ids)))
-            handle.write("\n")
+            
+            # Verify mask and tokens are same length
+            assert len(ids) == len(mask), \
+                f"Token/mask mismatch: {len(ids)} tokens vs {len(mask)} mask values"
+            
+            # Write tokens and mask
+            token_file.write(" ".join(map(str, ids)))
+            token_file.write("\n")
+            mask_file.write(" ".join(map(str, mask)))
+            mask_file.write("\n")
+            
             documents += 1
             total_tokens += len(ids)
 
