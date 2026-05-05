@@ -15,7 +15,7 @@ This writes:
 - `src/terry_daily_chat_train.jsonl`
 - `src/terry_daily_chat_valid.jsonl`
 
-2. Prepare tokenized training data:
+1. Prepare tokenized training data:
 
 ```bash
 python prepare_data.py
@@ -27,7 +27,7 @@ This writes:
 - `src/processed/terry_valid_tokens.txt`
 - `tokenizer/terry_byte/tokenizer_config.json`
 
-3. Train:
+1. Train:
 
 ```bash
 python train.py
