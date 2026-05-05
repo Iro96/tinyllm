@@ -53,25 +53,50 @@ class Trainer:
     # --------------------------------------------------------------
     # Step
     # --------------------------------------------------------------
-    def train_step(self, x, y):
+    def train_step(self, x, y, loss_mask=None):
+        """Train step with optional loss mask for assistant-only tokens.
+        
+        Args:
+            x: input token IDs
+            y: target token IDs (shifted by 1)
+            loss_mask: optional binary mask (1=train, 0=ignore) for each position in y
+        """
         x, y = x.to(self.device), y.to(self.device)
+        if loss_mask is not None:
+            loss_mask = loss_mask.to(self.device)
 
         padding_mask = x != self.tokenizer.pad_token_id
         logits = self.model(x, padding_mask=padding_mask)
 
+        # Reshape for cross entropy
+        logits_flat = logits.reshape(-1, logits.size(-1))
+        y_flat = y.reshape(-1)
+        
+        # Compute loss with padding ignored
         loss = F.cross_entropy(
-            logits.reshape(-1, logits.size(-1)),
-            y.reshape(-1),
+            logits_flat,
+            y_flat,
             ignore_index=self.tokenizer.pad_token_id,
-            reduction="sum",
+            reduction="none",
         )
+        
+        # Apply loss mask if provided (only train on assistant tokens)
+        if loss_mask is not None:
+            loss_mask_flat = loss_mask.reshape(-1).float()
+            valid_mask = (y_flat != self.tokenizer.pad_token_id)
+            effective_mask = loss_mask_flat * valid_mask.float()
 
-        tokens = (y != self.tokenizer.pad_token_id).sum()
-        loss = loss / tokens / self.train_cfg.grad_accum
-
-        loss.backward()
-
-        self.accum_loss += loss.item()
+            loss = loss * effective_mask
+            tokens = effective_mask.sum()
+        else:
+            # Legacy: count non-padding tokens
+            tokens = (y_flat != self.tokenizer.pad_token_id).sum()
+        
+        # Sum loss and normalize
+        if tokens > 0:
+            loss = loss.sum() / tokens / self.train_cfg.grad_accum
+            loss.backward()
+            self.accum_loss += loss.item()
         self.micro_step += 1
 
     # --------------------------------------------------------------
@@ -119,11 +144,17 @@ class Trainer:
         self.model.train()
 
         while self.optimizer_step < self.train_cfg.total_steps:
-            for x, y in dataloader:
+            for batch in dataloader:
                 if self.optimizer_step >= self.train_cfg.total_steps:
                     break
 
-                self.train_step(x, y)
+                # Handle both old (x, y) and new (x, y, mask) formats
+                if len(batch) == 3:
+                    x, y, loss_mask = batch
+                    self.train_step(x, y, loss_mask)
+                else:
+                    x, y = batch
+                    self.train_step(x, y)
 
                 if self.micro_step % self.train_cfg.grad_accum == 0:
                     self.optimizer_step_fn()
