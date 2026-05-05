@@ -13,9 +13,7 @@ hf/
 *.arrow
 src/**/*.jsonl
 src/**/*.txt
-
-# Tokenizer artifacts
-packed_tokens.txt
+src/**/*.txt.mask
 
 # PyTorch / training artifacts
 checkpoints/
