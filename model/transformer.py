@@ -13,6 +13,8 @@ class TransformerBlock(nn.Module):
             config.d_model,
             config.n_heads,
             config.max_seq_len,
+            config.sliding_window,
+            config.use_sliding_window,
         )
         self.norm2 = RMSNorm(config.d_model)
         self.ffn = SwiGLU(
@@ -52,6 +54,14 @@ class TinyLLM(nn.Module):
 
         # Weight tying
         self.head.weight = self.embed.weight
+        
+        self.gradient_checkpointing = False
+
+    def gradient_checkpointing_enable(self):
+        self.gradient_checkpointing = True
+        
+    def gradient_checkpointing_disable(self):
+        self.gradient_checkpointing = False
 
     def resize_token_embeddings(self, new_vocab_size: int):
         self.config.vocab_size = new_vocab_size
@@ -77,8 +87,22 @@ class TinyLLM(nn.Module):
             padding_mask: (B, T) boolean
         """
         x = self.embed(x)
-        for block in self.blocks:
-            x = block(x, padding_mask=padding_mask)
+        
+        if self.gradient_checkpointing and self.training:
+            # Use gradient checkpointing for memory efficiency
+            import torch.utils.checkpoint as checkpoint
+            
+            def create_custom_forward(module):
+                def custom_forward(*inputs):
+                    return module(*inputs)
+                return custom_forward
+            
+            for block in self.blocks:
+                x = checkpoint.checkpoint(create_custom_forward(block), x, padding_mask)
+        else:
+            for block in self.blocks:
+                x = block(x, padding_mask=padding_mask)
+                
         x = self.norm(x)
         return self.head(x)
 

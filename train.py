@@ -50,6 +50,16 @@ def main():
 
     # Model
     model = TinyLLM(model_cfg, vocab_size=len(tokenizer)).to(device)
+    
+    # Enable gradient checkpointing for memory efficiency with long sequences
+    if model_cfg.max_seq_len > 4096:
+        model.gradient_checkpointing_enable()
+    
+    # Mixed precision training
+    scaler = None
+    if train_cfg.use_mixed_precision and device.type == "cuda":
+        scaler = torch.amp.GradScaler()
+        print("Using mixed precision training")
 
     optimizer = AdamW(
         model.parameters(),
@@ -78,6 +88,7 @@ def main():
         train_cfg=train_cfg,
         device=device,
         logger=Logger(),
+        scaler=scaler,
     )
 
     trainer.try_resume()

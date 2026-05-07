@@ -15,6 +15,7 @@ class Trainer:
         device,
         logger,
         checkpoint_path="checkpoints/last_model.pt",
+        scaler=None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -24,6 +25,7 @@ class Trainer:
         self.device = device
         self.logger = logger
         self.checkpoint_path = checkpoint_path
+        self.scaler = scaler
 
         self.optimizer_step = 0
         self.micro_step = 0
@@ -65,47 +67,93 @@ class Trainer:
         if loss_mask is not None:
             loss_mask = loss_mask.to(self.device)
 
-        padding_mask = x != self.tokenizer.pad_token_id
-        logits = self.model(x, padding_mask=padding_mask)
+        if self.scaler is not None:
+            # Mixed precision training
+            with torch.amp.autocast(device_type=self.device.type, dtype=torch.float16):
+                padding_mask = x != self.tokenizer.pad_token_id
+                logits = self.model(x, padding_mask=padding_mask)
 
-        # Reshape for cross entropy
-        logits_flat = logits.reshape(-1, logits.size(-1))
-        y_flat = y.reshape(-1)
-        
-        # Compute loss with padding ignored
-        loss = F.cross_entropy(
-            logits_flat,
-            y_flat,
-            ignore_index=self.tokenizer.pad_token_id,
-            reduction="none",
-        )
-        
-        # Apply loss mask if provided (only train on assistant tokens)
-        if loss_mask is not None:
-            loss_mask_flat = loss_mask.reshape(-1).float()
-            valid_mask = (y_flat != self.tokenizer.pad_token_id)
-            effective_mask = loss_mask_flat * valid_mask.float()
+                # Reshape for cross entropy
+                logits_flat = logits.reshape(-1, logits.size(-1))
+                y_flat = y.reshape(-1)
+                
+                # Compute loss with padding ignored
+                loss = F.cross_entropy(
+                    logits_flat,
+                    y_flat,
+                    ignore_index=self.tokenizer.pad_token_id,
+                    reduction="none",
+                )
+                
+                # Apply loss mask if provided (only train on assistant tokens)
+                if loss_mask is not None:
+                    loss_mask_flat = loss_mask.reshape(-1).float()
+                    valid_mask = (y_flat != self.tokenizer.pad_token_id)
+                    effective_mask = loss_mask_flat * valid_mask.float()
 
-            loss = loss * effective_mask
-            tokens = effective_mask.sum()
+                    loss = loss * effective_mask
+                    tokens = effective_mask.sum()
+                else:
+                    # Legacy: count non-padding tokens
+                    tokens = (y_flat != self.tokenizer.pad_token_id).sum()
+                
+                # Sum loss and normalize
+                if tokens > 0:
+                    loss = loss.sum() / tokens / self.train_cfg.grad_accum
+                    self.scaler.scale(loss).backward()
+                    self.accum_loss += loss.item()
+                self.micro_step += 1
         else:
-            # Legacy: count non-padding tokens
-            tokens = (y_flat != self.tokenizer.pad_token_id).sum()
-        
-        # Sum loss and normalize
-        if tokens > 0:
-            loss = loss.sum() / tokens / self.train_cfg.grad_accum
-            loss.backward()
-            self.accum_loss += loss.item()
-        self.micro_step += 1
+            # Standard precision training
+            padding_mask = x != self.tokenizer.pad_token_id
+            logits = self.model(x, padding_mask=padding_mask)
+
+            # Reshape for cross entropy
+            logits_flat = logits.reshape(-1, logits.size(-1))
+            y_flat = y.reshape(-1)
+            
+            # Compute loss with padding ignored
+            loss = F.cross_entropy(
+                logits_flat,
+                y_flat,
+                ignore_index=self.tokenizer.pad_token_id,
+                reduction="none",
+            )
+            
+            # Apply loss mask if provided (only train on assistant tokens)
+            if loss_mask is not None:
+                loss_mask_flat = loss_mask.reshape(-1).float()
+                valid_mask = (y_flat != self.tokenizer.pad_token_id)
+                effective_mask = loss_mask_flat * valid_mask.float()
+
+                loss = loss * effective_mask
+                tokens = effective_mask.sum()
+            else:
+                # Legacy: count non-padding tokens
+                tokens = (y_flat != self.tokenizer.pad_token_id).sum()
+            
+            # Sum loss and normalize
+            if tokens > 0:
+                loss = loss.sum() / tokens / self.train_cfg.grad_accum
+                loss.backward()
+                self.accum_loss += loss.item()
+            self.micro_step += 1
 
     # --------------------------------------------------------------
     # Optimizer step
     # --------------------------------------------------------------
     def optimizer_step_fn(self):
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
-        self.optimizer.step()
+        if self.scaler is not None:
+            # Mixed precision step
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            # Standard precision step
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
+            
         self.scheduler.step()
         self.optimizer.zero_grad(set_to_none=True)
 

@@ -123,6 +123,7 @@ def write_tokenized_split(
     source_path: str | Path,
     target_path: str | Path,
     tokenizer,
+    max_seq_len: int = 8192,  # Allow longer sequences
 ) -> dict[str, int]:
     """Encode one JSONL split into one-doc-per-line token IDs with masks.
     
@@ -141,7 +142,7 @@ def write_tokenized_split(
          mask_path.open("w", encoding="utf-8") as mask_file:
         for record in iter_jsonl_records(source_path):
             ids, mask = serialize_chat_record(tokenizer, record["messages"])
-            max_length = ModelConfig().max_seq_len
+            max_length = max_seq_len  # Use parameter instead of config
             if len(ids) > max_length:
                 ids = ids[:max_length]
                 mask = mask[:max_length]
@@ -219,8 +220,8 @@ def prepare_dataset_assets(
     tokenizer = load_tokenizer()
     tokenizer.save_pretrained(tokenizer_dir)
 
-    train_stats = write_tokenized_split(train_source, train_tokens, tokenizer)
-    valid_stats = write_tokenized_split(valid_source, valid_tokens, tokenizer)
+    train_stats = write_tokenized_split(train_source, train_tokens, tokenizer, max_seq_len=24576)  # Allow up to 24K tokens
+    valid_stats = write_tokenized_split(valid_source, valid_tokens, tokenizer, max_seq_len=24576)
 
     return {
         "train_source": str(train_source),
