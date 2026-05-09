@@ -1,6 +1,14 @@
-# TinyLLM
+# TerryLM - Tiny Reasoning Model
 
-TinyLLM is a compact Transformer project for training and chatting with Terry, a tiny synthetic assistant. This model now supports **long context reasoning** with sequences up to 25K tokens using efficient sliding window attention.
+<p align="center"><em>A ~10M parameter LLM that was designed for reasoning</em></p>
+
+<p align="center">
+  <a href="https://huggingface.co/datasets/Iro96/terrylm_60k_generic"><img src="https://img.shields.io/badge/🤗_Dataset-terrylm--60k-blue" alt="Dataset"/></a>&nbsp;
+  <a href="https://huggingface.co/arman-bd/terrylm-10M"><img src="https://img.shields.io/badge/🤗_Model-terrlylm--9M-orange" alt="Model"/></a>&nbsp;
+  <a href="https://github.com/Iro96/tinyllm/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License"/></a>
+</p>
+
+TerryLM is a compact Transformer project for training and chatting with Terry, a tiny synthetic assistant. This model was disigned for now supports **long context reasoning** with sequences up to 25K tokens using efficient sliding window attention.
 
 ## Key Features
 
