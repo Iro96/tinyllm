@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://huggingface.co/datasets/Iro96/terrylm_60k_generic"><img src="https://img.shields.io/badge/🤗_Dataset-terrylm--60k-blue" alt="Dataset"/></a>&nbsp;
-  <a href="https://huggingface.co/arman-bd/terrylm-10M"><img src="https://img.shields.io/badge/🤗_Model-terrlylm--9M-orange" alt="Model"/></a>&nbsp;
+  <a href="https://huggingface.co/Iro96/terrylm-10M"><img src="https://img.shields.io/badge/🤗_Model-terrlylm--9M-orange" alt="Model"/></a>&nbsp;
   <a href="https://github.com/Iro96/tinyllm/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License"/></a>
 </p>
 
