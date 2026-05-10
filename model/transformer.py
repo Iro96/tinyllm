@@ -98,7 +98,12 @@ class TinyLLM(nn.Module):
                 return custom_forward
             
             for block in self.blocks:
-                x = checkpoint.checkpoint(create_custom_forward(block), x, padding_mask)
+                x = checkpoint.checkpoint(
+                    create_custom_forward(block),
+                    x,
+                    padding_mask,
+                    use_reentrant=False,
+                )
         else:
             for block in self.blocks:
                 x = block(x, padding_mask=padding_mask)
