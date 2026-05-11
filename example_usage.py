@@ -6,7 +6,7 @@ from tools.inference import ModelInference
 
 def main():
     print("=== Terry Inference Example ===\n")
-    model = ModelInference(checkpoint_path="checkpoints/last_model.pt", device="auto")
+    model = ModelInference(checkpoint_path="releases/terry_tinyllm_5000.pt", device="auto")
 
     prompts = [
         "hi terry",
@@ -17,7 +17,7 @@ def main():
 
     for index, prompt in enumerate(prompts, start=1):
         print(f"\n--- Prompt {index}: {prompt} ---")
-        reply = model.generate(prompt, max_length=40, temperature=0.8)
+        reply = model.generate(prompt, temperature=0.8)
         print(f"Terry: {reply}")
 
     print("\nEnter prompts to chat with Terry. Type 'quit' to exit.")
@@ -30,7 +30,7 @@ def main():
             continue
 
         try:
-            reply = model.generate(user_input, max_length=60, temperature=0.8)
+            reply = model.generate(user_input, temperature=0.8)
             print(f"Terry: {reply}")
         except Exception as exc:
             print(f"Error during generation: {exc}")

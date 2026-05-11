@@ -23,6 +23,10 @@ class ModelInference:
         self.model_config = ModelConfig()
         self.device = self._get_device(device)
         self.tokenizer = load_tokenizer(tokenizer_path)
+        self._text_eos_token_ids = self.tokenizer.encode(
+            self.tokenizer.eos_token,
+            add_special_tokens=False,
+        )
         self.model = self._load_model(checkpoint_path)
 
         print(f"Using device: {self.device}")
@@ -76,11 +80,30 @@ class ModelInference:
             stop = reply_ids.index(self.tokenizer.eos_token_id)
             reply_ids = reply_ids[:stop]
 
+        text_eos_index = self._find_token_subsequence(
+            reply_ids,
+            self._text_eos_token_ids,
+        )
+        if text_eos_index != -1:
+            reply_ids = reply_ids[:text_eos_index]
+
         return self.tokenizer.decode(
             reply_ids,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=True,
         ).strip()
+
+    @staticmethod
+    def _find_token_subsequence(tokens: list[int], pattern: list[int]) -> int:
+        if not pattern or len(pattern) > len(tokens):
+            return -1
+
+        last_start = len(tokens) - len(pattern) + 1
+        for index in range(last_start):
+            if tokens[index:index + len(pattern)] == pattern:
+                return index
+
+        return -1
 
     def generate(
         self,

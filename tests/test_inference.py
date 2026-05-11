@@ -41,6 +41,27 @@ class TestTokenizer(unittest.TestCase):
         self.assertEqual(tokenizer.eos_token_id, 2)
 
 
+class TestInferenceDecoding(unittest.TestCase):
+    def test_decode_generated_reply_strips_literal_im_end_marker(self):
+        tokenizer = load_tokenizer()
+        model = ModelInference.__new__(ModelInference)
+        model.tokenizer = tokenizer
+        model._text_eos_token_ids = tokenizer.encode(
+            tokenizer.eos_token,
+            add_special_tokens=False,
+        )
+
+        prompt_length = 4
+        reply_ids = tokenizer.encode(
+            "hello owner\n<|im_end|>\nextra text",
+            add_special_tokens=False,
+        )
+        generated_ids = torch.tensor([11, 12, 13, 14, *reply_ids], dtype=torch.long)
+
+        reply = model._decode_generated_reply(generated_ids, prompt_length)
+        self.assertEqual(reply, "hello owner")
+
+
 @unittest.skipUnless(
     checkpoint_is_compatible(CHECKPOINT_PATH),
     "compatible Terry checkpoint required for inference smoke tests",
