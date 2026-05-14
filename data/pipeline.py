@@ -55,9 +55,9 @@ def build_collate_fn(tokenizer):
 
 
 def build_dataloader(tokenizer, model_cfg, train_cfg, use_cuda):
-    """Build the local Terry training dataloader.
+    """Build the FineWeb training dataloader.
 
-    If the dataset or tokenized assets are missing, they are generated locally.
+    If the dataset or tokenized assets are missing, they are streamed and cached locally.
     """
     train_tokens = Path(train_cfg.train_tokens_path)
     valid_tokens = Path(train_cfg.valid_tokens_path)
@@ -70,8 +70,16 @@ def build_dataloader(tokenizer, model_cfg, train_cfg, use_cuda):
             train_tokens=train_cfg.train_tokens_path,
             valid_tokens=train_cfg.valid_tokens_path,
             tokenizer_dir=train_cfg.tokenizer_dir,
-            train_samples=train_cfg.train_samples,
-            valid_samples=train_cfg.valid_samples,
+            dataset_repo=train_cfg.dataset_repo,
+            dataset_name=train_cfg.dataset_name,
+            dataset_split=train_cfg.dataset_split,
+            train_target_tokens=train_cfg.train_target_tokens,
+            valid_target_tokens=train_cfg.valid_target_tokens,
+            buffer_size=train_cfg.buffer_size,
+            language=train_cfg.language,
+            min_language_score=train_cfg.min_language_score,
+            min_token_count=train_cfg.min_token_count,
+            max_token_count=train_cfg.max_token_count,
             seed=train_cfg.seed,
             force=False,
         )

@@ -6,13 +6,12 @@ import torch
 import torch.nn.functional as F
 
 from config import ModelConfig
-from data.dataset_builder import build_generation_prompt
 from model.transformer import TinyLLM
 from tools.tokenizer import load_tokenizer
 
 
 class ModelInference:
-    """Load checkpoints and chat with the Terry model."""
+    """Load checkpoints and generate text continuations."""
 
     def __init__(
         self,
@@ -65,8 +64,16 @@ class ModelInference:
 
         return model
 
-    def _build_chat_input(self, prompt: str) -> torch.Tensor:
-        input_ids = build_generation_prompt(self.tokenizer, prompt)
+    def _build_input(self, prompt: str) -> torch.Tensor:
+        input_ids = [self.tokenizer.bos_token_id]
+        text = prompt.strip()
+        if text:
+            input_ids.extend(
+                self.tokenizer.encode(
+                    text,
+                    add_special_tokens=False,
+                )
+            )
         return torch.tensor([input_ids], dtype=torch.long, device=self.device)
 
     def _decode_generated_reply(
@@ -114,9 +121,9 @@ class ModelInference:
         top_p: float = 0.9,
         do_sample: bool = True,
     ) -> str:
-        """Generate Terry's next assistant reply for a plain user prompt."""
+        """Generate a continuation for a plain text prompt."""
         self.model.eval()
-        input_ids = self._build_chat_input(prompt)
+        input_ids = self._build_input(prompt)
         prompt_length = input_ids.size(1)
 
         with torch.no_grad():
@@ -159,10 +166,10 @@ class ModelInference:
         temperature: float = 1.0,
         top_p: float = 1.0,
     ):
-        """Return the top token probabilities for the next assistant token."""
+        """Return the top token probabilities for the next token."""
         self.model.eval()
 
-        input_ids = self._build_chat_input(prompt)
+        input_ids = self._build_input(prompt)
 
         with torch.no_grad():
             padding_mask = input_ids != self.tokenizer.pad_token_id

@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import ModelConfig
-from data.dataset_builder import serialize_chat_record
+from data.dataset_builder import serialize_text_record
 from model.transformer import TinyLLM
 from tools.tokenizer import load_tokenizer
 
@@ -37,34 +37,14 @@ class TestModelInternals(unittest.TestCase):
         self.assertEqual(model.head.weight.size(0), target_vocab_size)
         self.assertIs(model.head.weight, model.embed.weight)
 
-    def test_02_serialize_chat_record_mask_alignment(self):
-        tokenizer = load_tokenizer()
-        messages = [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "hi owner"},
-        ]
-        tokens, mask = serialize_chat_record(
-            tokenizer,
-            messages,
-            include_system_prompt=False,
-        )
+    def test_02_serialize_text_record_mask_alignment(self):
+        tokens, mask = serialize_text_record(self.tokenizer, "hello world")
 
         self.assertEqual(len(tokens), len(mask))
-        self.assertGreaterEqual(sum(mask), 1)
-
-        user_role_tokens = tokenizer.encode("user\n", add_special_tokens=False)
-        user_content_tokens = tokenizer.encode("hello\n<|im_end|>\n", add_special_tokens=False)
-        assistant_role_tokens = tokenizer.encode("assistant\n", add_special_tokens=False)
-
-        assistant_content_start = (
-            1
-            + len(user_role_tokens)
-            + len(user_content_tokens)
-            + len(assistant_role_tokens)
-        )
-
-        self.assertEqual(mask[assistant_content_start], 1)
-        self.assertTrue(all(value == 1 for value in mask[assistant_content_start:]))
+        self.assertEqual(tokens[0], self.tokenizer.bos_token_id)
+        self.assertEqual(tokens[-1], self.tokenizer.eos_token_id)
+        self.assertEqual(mask[0], 0)
+        self.assertTrue(all(value == 1 for value in mask[1:]))
 
 
 class TestTrainingLoop(unittest.TestCase):

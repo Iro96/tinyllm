@@ -3,12 +3,12 @@
 <p align="center"><em>A ~10M parameter LLM that was designed for reasoning</em></p>
 
 <p align="center">
-  <a href="https://huggingface.co/datasets/Iro96/terrylm_60k_generic"><img src="https://img.shields.io/badge/🤗_Dataset-terrylm--60k-blue" alt="Dataset"/></a>&nbsp;
+  <a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb"><img src="https://img.shields.io/badge/🤗_Dataset-FineWeb-blue" alt="Dataset"/></a>&nbsp;
   <a href="https://huggingface.co/Iro96/terrylm-10M"><img src="https://img.shields.io/badge/🤗_Model-terrlylm--9M-orange" alt="Model"/></a>&nbsp;
   <a href="https://github.com/Iro96/tinyllm/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License"/></a>
 </p>
 
-TerryLM is a compact Transformer project for training and chatting with Terry, a tiny synthetic assistant. This model was disigned for now supports **long context reasoning** with sequences up to 25K tokens using efficient sliding window attention.
+TerryLM is a compact Transformer project for training and chatting with Terry, a tiny synthetic assistant. The training pipeline now streams filtered English documents from FineWeb and supports **long context reasoning** with sequences up to 25K tokens using efficient sliding window attention.
 
 ## Key Features
 
@@ -19,27 +19,24 @@ TerryLM is a compact Transformer project for training and chatting with Terry, a
 
 ## Data flow
 
-1. Generate Terry conversations:
+1. Install dependencies:
 
 ```bash
-python data/generate_terry_dataset.py
+pip install -r requirements.txt
 ```
 
-This writes:
-
-- `src/terry_daily_chat_train.jsonl`
-- `src/terry_daily_chat_valid.jsonl`
-
-1. Prepare tokenized training data:
+1. Prepare filtered FineWeb training data:
 
 ```bash
 python prepare_data.py
 ```
 
-This writes:
+By default this streams `HuggingFaceFW/fineweb`, selects `CC-MAIN-2025-26`, filters for high-confidence English documents, and writes:
 
-- `src/processed/terry_train_tokens.txt`
-- `src/processed/terry_valid_tokens.txt`
+- `src/fineweb_train.jsonl`
+- `src/fineweb_valid.jsonl`
+- `src/processed/fineweb_train_tokens.txt`
+- `src/processed/fineweb_valid_tokens.txt`
 - `tokenizer/terry_byte/tokenizer_config.json`
 
 1. Train:
