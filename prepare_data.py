@@ -66,7 +66,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Regenerate the cached FineWeb JSONL splits before tokenization.",
     )
-    return parser.parse_args()
+    args, _ = parser.parse_known_args()
+    return args
 
 
 def main():
